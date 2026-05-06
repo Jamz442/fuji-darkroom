@@ -48,6 +48,9 @@ function addVigGrain(ctx,w,h,vignette,grain){
 // ── RAW Support ───────────────────────────────────────────────
 const RAW_EXTS=new Set(['dng','orf','cr2','nef','arw','rw2','raf']);
 const isRAW=f=>RAW_EXTS.has(f.name.split('.').pop().toLowerCase());
+const HEIC_EXTS=new Set(['heic','heif']);
+const isHEIC=f=>HEIC_EXTS.has(f.name.split('.').pop().toLowerCase())||f.type==='image/heic'||f.type==='image/heif';
+function loadHeic2any(){return new Promise((res,rej)=>{if(window.heic2any){res(window.heic2any);return;}const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';s.onload=()=>res(window.heic2any);s.onerror=()=>rej(new Error('Could not load HEIC decoder'));document.head.appendChild(s);});}
 function loadUTIF(){return new Promise((res,rej)=>{if(window.UTIF){res(window.UTIF);return;}const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js';s.onload=()=>res(window.UTIF);s.onerror=()=>rej(new Error('Could not load RAW decoder'));document.head.appendChild(s);});}
 async function decodeRAW(file){
   const UTIF=await loadUTIF(),buf=await file.arrayBuffer(),ifds=UTIF.decode(buf);
@@ -196,6 +199,23 @@ export default function App() {
 
   const loadImage = useCallback(file => {
     if (!file) return;
+    if (isHEIC(file)) {
+      setRaw('loading'); setAdj(DEF_ADJ); setSim(null); setTx(DEF_TX); setCrop(null);
+      loadHeic2any().then(h2a=>h2a({blob:file,toType:'image/png'})).then(blob=>{
+        const url=URL.createObjectURL(blob);
+        const img=new Image();
+        img.onload=()=>{
+          origImgRef.current=img;
+          const mW=1400,mH=1000;let w=img.naturalWidth,h=img.naturalHeight;
+          if(w>mW||h>mH){const sc=Math.min(mW/w,mH/h);w=Math.round(w*sc);h=Math.round(h*sc);}
+          const tc=document.createElement('canvas');tc.width=w;tc.height=h;
+          tc.getContext('2d').drawImage(img,0,0,w,h);
+          setOrig(tc.getContext('2d').getImageData(0,0,w,h));
+          setAdj(DEF_ADJ);setSim(null);setTx(DEF_TX);setCrop(null);setRaw('');URL.revokeObjectURL(url);
+        };img.src=url;
+      }).catch(e=>setRaw(e.message));
+      return;
+    }
     if (isRAW(file)) {
       setRaw('loading'); setAdj(DEF_ADJ); setSim(null); setTx(DEF_TX); setCrop(null);
       decodeRAW(file).then(id=>{setOrig(id);setRaw('');}).catch(e=>setRaw(e.message));
@@ -375,7 +395,7 @@ export default function App() {
                 ?<div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:'#c8913a'}}>Decoding RAW…</div>
                 :rawStatus
                   ?<><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:18,color:'#c05050',marginBottom:8}}>RAW decode failed</div><div style={{fontSize:'9px',color:'#6a4040',fontFamily:"'JetBrains Mono',monospace"}}>{rawStatus}</div></>
-                  :<><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:'#6a6055',marginBottom:8}}>Drop a photo to begin</div><div style={{fontSize:'9px',color:'#3a3628',fontFamily:"'JetBrains Mono',monospace",letterSpacing:'0.1em'}}>JPG · PNG · WEBP · DNG · ORF · CR2 · NEF · ARW</div></>
+                  :<><div style={{fontFamily:"'Cormorant Garamond',serif",fontSize:22,color:'#6a6055',marginBottom:8}}>Drop a photo to begin</div><div style={{fontSize:'9px',color:'#3a3628',fontFamily:"'JetBrains Mono',monospace",letterSpacing:'0.1em'}}>JPG · PNG · WEBP · HEIC · DNG · ORF · CR2 · NEF · ARW</div></>
               }
             </div>
           ) : (
@@ -389,7 +409,7 @@ export default function App() {
         </div>
       </div>
 
-      <input ref={fileRef} type="file" accept="image/*,.dng,.orf,.cr2,.nef,.arw,.rw2,.raf" style={{display:'none'}} onChange={e=>loadImage(e.target.files[0])}/>
+      <input ref={fileRef} type="file" accept="image/*,.heic,.heif,.dng,.orf,.cr2,.nef,.arw,.rw2,.raf" style={{display:'none'}} onChange={e=>loadImage(e.target.files[0])}/>
     </div>
   );
 }
