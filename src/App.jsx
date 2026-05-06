@@ -19,24 +19,107 @@ const SIMS = {
 };
 
 // ── Pixel Processing ──────────────────────────────────────────
-function process(imageData,adj,simKey){
-  const src=imageData.data,n=src.length,out=new Uint8ClampedArray(n);
+// sRGB → linear light LUT (precomputed)
+const TO_LIN = new Float32Array(256);
+for(let i=0;i<256;i++){const v=i/255;TO_LIN[i]=v<=0.04045?v/12.92:Math.pow((v+0.055)/1.055,2.4);}
+// linear → sRGB (gamma encode)
+const toSRGB = v => {
+  v=Math.max(0,Math.min(1,v));
+  return Math.round((v<=0.0031308?v*12.92:1.055*Math.pow(v,1/2.4)-0.055)*255);
+};
+// Smoothstep: smooth transition from a→b
+const ss = (a,b,x) => { const t=Math.max(0,Math.min(1,(x-a)/(b-a))); return t*t*(3-2*t); };
+
+function process(imageData, adj, simKey) {
+  const src=imageData.data, n=src.length, out=new Uint8ClampedArray(n);
   const sim=simKey?SIMS[simKey]:null;
-  const rL=sim?lut(sim.r):null,gL=sim?lut(sim.g):null,bL=sim?lut(sim.b):null;
-  const expF=Math.pow(2,adj.exposure),cA=adj.contrast*2.55,cF=(259*(cA+255))/(255*(259-cA));
-  const tR=adj.temperature*.22,tB=-adj.temperature*.22;
+  const rL=sim?lut(sim.r):null, gL=sim?lut(sim.g):null, bL=sim?lut(sim.b):null;
+
+  // ── Per-frame constants ──
+  const expF = Math.pow(2, adj.exposure);
+
+  // Temperature: power-of-2 channel multipliers following blue-yellow axis
+  // Tint: green-magenta axis
+  const t=adj.temperature/100, ti=adj.tint/100;
+  const rWB = Math.pow(2,  t*0.40 + ti*0.10);
+  const gWB = Math.pow(2,  t*0.03 - ti*0.20);
+  const bWB = Math.pow(2, -t*0.60 + ti*0.06);
+  const hasWB = adj.temperature||adj.tint;
+
+  // Contrast: precompute tanh S-curve LUT (1024 steps in linear)
+  const cLUT = new Float32Array(1024);
+  for(let i=0;i<1024;i++){
+    const v=i/1023;
+    if(!adj.contrast){cLUT[i]=v;continue;}
+    const k=adj.contrast/100;
+    if(k>0){const x=v*2-1,f=1+k*3.5;cLUT[i]=(Math.tanh(x*f)/Math.tanh(f)+1)/2;}
+    else{cLUT[i]=0.5+(v-0.5)/(1+Math.abs(k)*2.5);}
+  }
+  const applyC = v => cLUT[Math.max(0,Math.min(1023,Math.round(v*1023)))];
+
+  // ── Per-pixel pipeline (linear light) ──
   for(let i=0;i<n;i+=4){
-    let r=src[i],g=src[i+1],b=src[i+2];
-    r=clamp(r+tR);b=clamp(b+tB);
-    r=clamp(r*expF);g=clamp(g*expF);b=clamp(b*expF);
-    if(adj.brightness){const br=adj.brightness*1.8;r=clamp(r+br);g=clamp(g+br);b=clamp(b+br);}
-    if(adj.contrast){r=clamp(cF*(r-128)+128);g=clamp(cF*(g-128)+128);b=clamp(cF*(b-128)+128);}
-    const lum=(0.2126*r+0.7152*g+0.0722*b)/255;
-    if(adj.highlights){const w=Math.pow(Math.max(0,lum*2-1),1.5)*adj.highlights*.5;r=clamp(r+w);g=clamp(g+w);b=clamp(b+w);}
-    if(adj.shadows){const w=Math.pow(Math.max(0,1-lum*2),1.5)*adj.shadows*.5;r=clamp(r+w);g=clamp(g+w);b=clamp(b+w);}
-    if(sim){if(sim.bw){const gr=clamp(Math.round(.299*r+.587*g+.114*b));r=rL[gr];g=gL[gr];b=bL[gr];}
-    else{r=rL[clamp(r)];g=gL[clamp(g)];b=bL[clamp(b)];if(sim.sat!==1){const[h,s,l]=rgbToHsl(r,g,b);[r,g,b]=hslToRgb(h,clamp01(s*sim.sat),l);}}}
-    out[i]=r;out[i+1]=g;out[i+2]=b;out[i+3]=src[i+3];
+    // 1. sRGB → linear
+    let r=TO_LIN[src[i]], g=TO_LIN[src[i+1]], b=TO_LIN[src[i+2]];
+
+    // 2. White balance (multiplicative in linear — correct colour science)
+    if(hasWB){r*=rWB;g*=gWB;b*=bWB;}
+
+    // 3. Exposure (linear multiply — one stop = 2×)
+    r*=expF;g*=expF;b*=expF;
+
+    // 4. Blacks: lift/crush the shadow endpoint
+    if(adj.blacks){
+      const lum=0.2126*r+0.7152*g+0.0722*b;
+      const mask=Math.pow(ss(0.5,0,lum),1.2);
+      const shift=(adj.blacks/100)*0.30*mask;
+      r+=shift;g+=shift;b+=shift;
+    }
+
+    // 5. Whites: compress/expand the highlight endpoint
+    if(adj.whites){
+      const lum=0.2126*r+0.7152*g+0.0722*b;
+      const mask=Math.pow(ss(0.5,1.2,lum),1.2);
+      const shift=(adj.whites/100)*0.38*mask;
+      r+=shift;g+=shift;b+=shift;
+    }
+
+    // 6. Shadows: boost/crush dark tonal region (smoothstep mask, not hard threshold)
+    if(adj.shadows){
+      const lum=0.2126*r+0.7152*g+0.0722*b;
+      const mask=ss(0.65,0,lum);
+      const shift=(adj.shadows/100)*0.50*mask;
+      r+=shift;g+=shift;b+=shift;
+    }
+
+    // 7. Highlights: roll off bright tonal region
+    if(adj.highlights){
+      const lum=0.2126*r+0.7152*g+0.0722*b;
+      const mask=ss(0.35,1.1,lum);
+      const shift=(adj.highlights/100)*0.42*mask;
+      r+=shift;g+=shift;b+=shift;
+    }
+
+    // 8. Contrast: tanh S-curve in linear light
+    if(adj.contrast){
+      r=applyC(Math.max(0,Math.min(1,r)));
+      g=applyC(Math.max(0,Math.min(1,g)));
+      b=applyC(Math.max(0,Math.min(1,b)));
+    }
+
+    // 9. Brightness: gentle linear shift (last resort, post-curve)
+    if(adj.brightness){const br=adj.brightness/100*0.35;r+=br;g+=br;b+=br;}
+
+    // 10. linear → sRGB (gamma encode)
+    let rS=toSRGB(r), gS=toSRGB(g), bS=toSRGB(b);
+
+    // 11. Film simulation (applied in gamma space — LUT designed for sRGB)
+    if(sim){
+      if(sim.bw){const gr=clamp(Math.round(.299*rS+.587*gS+.114*bS));rS=rL[gr];gS=gL[gr];bS=bL[gr];}
+      else{rS=rL[clamp(rS)];gS=gL[clamp(gS)];bS=bL[clamp(bS)];if(sim.sat!==1){const[h,s,l]=rgbToHsl(rS,gS,bS);[rS,gS,bS]=hslToRgb(h,clamp01(s*sim.sat),l);}}
+    }
+
+    out[i]=rS;out[i+1]=gS;out[i+2]=bS;out[i+3]=src[i+3];
   }
   return new ImageData(out,imageData.width,imageData.height);
 }
@@ -190,7 +273,7 @@ function Slider({label,value,min,max,step=1,unit='',onChange}){
 }
 
 // ── App ───────────────────────────────────────────────────────
-const DEF_ADJ = { exposure:0, brightness:0, contrast:0, highlights:0, shadows:0, temperature:0, vignette:0, grain:0 };
+const DEF_ADJ = { exposure:0, brightness:0, contrast:0, highlights:0, shadows:0, whites:0, blacks:0, temperature:0, tint:0, vignette:0, grain:0 };
 const DEF_TX  = { r:0, flipH:false, flipV:false, freeRot:0 };
 
 export default function App() {
@@ -338,8 +421,11 @@ export default function App() {
           <div style={{borderTop:'1px solid #1a1710',margin:'8px 0'}}/>
           <Slider label="Highlights"  value={adj.highlights}  min={-100} max={100} onChange={v=>setA('highlights',v)}/>
           <Slider label="Shadows"     value={adj.shadows}     min={-100} max={100} onChange={v=>setA('shadows',v)}/>
+          <Slider label="Whites"      value={adj.whites}      min={-100} max={100} onChange={v=>setA('whites',v)}/>
+          <Slider label="Blacks"      value={adj.blacks}      min={-100} max={100} onChange={v=>setA('blacks',v)}/>
           <div style={{borderTop:'1px solid #1a1710',margin:'8px 0'}}/>
           <Slider label="Temperature" value={adj.temperature} min={-100} max={100} onChange={v=>setA('temperature',v)}/>
+          <Slider label="Tint"        value={adj.tint}        min={-100} max={100} onChange={v=>setA('tint',v)}/>
           <div style={{borderTop:'1px solid #1a1710',margin:'8px 0'}}/>
           <Slider label="Vignette"    value={adj.vignette}    min={-100} max={100} onChange={v=>setA('vignette',v)}/>
           <Slider label="Grain"       value={adj.grain}       min={0}    max={100} onChange={v=>setA('grain',v)}/>
