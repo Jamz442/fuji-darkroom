@@ -50,7 +50,36 @@ const RAW_EXTS=new Set(['dng','orf','cr2','nef','arw','rw2','raf']);
 const isRAW=f=>RAW_EXTS.has(f.name.split('.').pop().toLowerCase());
 const HEIC_EXTS=new Set(['heic','heif']);
 const isHEIC=f=>HEIC_EXTS.has(f.name.split('.').pop().toLowerCase())||f.type==='image/heic'||f.type==='image/heif';
-function loadHeic2any(){return new Promise((res,rej)=>{if(window.heic2any){res(window.heic2any);return;}const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/heic2any@0.0.4/dist/heic2any.min.js';s.onload=()=>res(window.heic2any);s.onerror=()=>rej(new Error('Could not load HEIC decoder'));document.head.appendChild(s);});}
+let _libheif=null;
+async function loadLibheif(){
+  if(_libheif)return _libheif;
+  const mod=await import('https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.mjs');
+  _libheif=mod.default;
+  return _libheif;
+}
+async function decodeHEIC(file){
+  const libheif=await loadLibheif();
+  const buf=await file.arrayBuffer();
+  const decoder=new libheif.HeifDecoder();
+  const data=decoder.decode(new Uint8Array(buf));
+  if(!data||!data.length)throw new Error('No images found in HEIC file');
+  const image=data[0];
+  const W=image.get_width(), H=image.get_height();
+  const rawData=await new Promise((res,rej)=>{
+    image.display({data:new Uint8ClampedArray(W*H*4),width:W,height:H},(d)=>{
+      if(!d)return rej(new Error('HEIF decode failed'));
+      res(d);
+    });
+  });
+  const scale=Math.min(1,1400/W,1000/H);
+  if(scale===1)return new ImageData(rawData.data,W,H);
+  const outW=Math.round(W*scale),outH=Math.round(H*scale);
+  const tmp=document.createElement('canvas');tmp.width=W;tmp.height=H;
+  tmp.getContext('2d').putImageData(new ImageData(rawData.data,W,H),0,0);
+  const out=document.createElement('canvas');out.width=outW;out.height=outH;
+  out.getContext('2d').drawImage(tmp,0,0,outW,outH);
+  return out.getContext('2d').getImageData(0,0,outW,outH);
+}
 function loadUTIF(){return new Promise((res,rej)=>{if(window.UTIF){res(window.UTIF);return;}const s=document.createElement('script');s.src='https://cdn.jsdelivr.net/npm/utif@3.1.0/UTIF.js';s.onload=()=>res(window.UTIF);s.onerror=()=>rej(new Error('Could not load RAW decoder'));document.head.appendChild(s);});}
 async function decodeRAW(file){
   const UTIF=await loadUTIF(),buf=await file.arrayBuffer(),ifds=UTIF.decode(buf);
@@ -201,18 +230,8 @@ export default function App() {
     if (!file) return;
     if (isHEIC(file)) {
       setRaw('loading'); setAdj(DEF_ADJ); setSim(null); setTx(DEF_TX); setCrop(null);
-      loadHeic2any().then(h2a=>h2a({blob:file,toType:'image/png'})).then(blob=>{
-        const url=URL.createObjectURL(blob);
-        const img=new Image();
-        img.onload=()=>{
-          origImgRef.current=img;
-          const mW=1400,mH=1000;let w=img.naturalWidth,h=img.naturalHeight;
-          if(w>mW||h>mH){const sc=Math.min(mW/w,mH/h);w=Math.round(w*sc);h=Math.round(h*sc);}
-          const tc=document.createElement('canvas');tc.width=w;tc.height=h;
-          tc.getContext('2d').drawImage(img,0,0,w,h);
-          setOrig(tc.getContext('2d').getImageData(0,0,w,h));
-          setAdj(DEF_ADJ);setSim(null);setTx(DEF_TX);setCrop(null);setRaw('');URL.revokeObjectURL(url);
-        };img.src=url;
+      decodeHEIC(file).then(imgData=>{
+        setOrig(imgData); setRaw('');
       }).catch(e=>setRaw(e.message));
       return;
     }
