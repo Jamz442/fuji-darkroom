@@ -54,7 +54,7 @@ let _libheif=null;
 async function loadLibheif(){
   if(_libheif)return _libheif;
   const mod=await import('https://cdn.jsdelivr.net/npm/libheif-js@1.19.8/libheif-wasm/libheif-bundle.mjs');
-  _libheif=mod.default;
+  _libheif=await mod.default();
   return _libheif;
 }
 async function decodeHEIC(file){
