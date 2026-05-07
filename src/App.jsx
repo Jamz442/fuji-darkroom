@@ -288,7 +288,7 @@ export default function App(){
 
   useEffect(()=>{
     const l=document.createElement('link');l.href='https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,500;0,600;1,400&family=JetBrains+Mono:wght@300;400&family=Figtree:wght@300;400&display=swap';l.rel='stylesheet';document.head.appendChild(l);
-    const s=document.createElement('style');s.textContent=`html,body{margin:0;padding:0;height:100%;overflow:hidden;}*{box-sizing:border-box;}input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:#4d8ef0;border:2px solid #0e1218;cursor:pointer;}::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-track{background:#111111;}::-webkit-scrollbar-thumb{background:#1e2a3a;} button{transition:filter .12s ease,box-shadow .12s ease,border-color .12s ease,background .12s ease,color .12s ease;}button:hover{filter:brightness(1.22);box-shadow:0 0 0 1px rgba(255,255,255,0.04);}button:active{filter:brightness(0.92);}`;document.head.appendChild(s);
+    const s=document.createElement('style');s.textContent=`html,body{margin:0;padding:0;width:100%;height:100%;overflow:hidden;}*{box-sizing:border-box;}input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:11px;height:11px;border-radius:50%;background:#4d8ef0;border:2px solid #0e1218;cursor:pointer;}::-webkit-scrollbar{width:3px;}::-webkit-scrollbar-track{background:#111111;}::-webkit-scrollbar-thumb{background:#1e2a3a;} button{transition:filter .12s ease,box-shadow .12s ease,border-color .12s ease,background .12s ease,color .12s ease;}button:hover{filter:brightness(1.22);box-shadow:0 0 0 1px rgba(255,255,255,0.04);}button:active{filter:brightness(0.92);}`;document.head.appendChild(s);
   },[]);
 
   const loadImage=useCallback(file=>{
@@ -365,7 +365,7 @@ export default function App(){
   };
 
   return(
-    <div style={{display:'flex',width:'100vw',height:'100vh',background:'#111111',color:'#cdd2dc',fontFamily:"'Figtree',sans-serif",overflow:'hidden'}}>
+    <div style={{display:'flex',width:'100%',height:'100vh',background:'#111111',color:'#cdd2dc',fontFamily:"'Figtree',sans-serif",overflow:'hidden'}}>
 
       {/* ── Left: Film Sims ── */}
       <div style={{width:200,flexShrink:0,background:'#1e1e1e',borderRight:'1px solid #282828',display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'2px 0 8px rgba(0,0,0,0.35)',zIndex:2}}>
